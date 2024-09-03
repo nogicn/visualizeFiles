@@ -1,12 +1,14 @@
 package main
 
 import (
-	"bytes"
 	"image"
 	"image/color"
 	_ "image/png"
-	"io"
 	"os"
+	"runtime"
+	"sync"
+
+	"github.com/edsrzf/mmap-go"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
@@ -21,7 +23,6 @@ func main() {
 
 	filename := "filesInput/randomphoto.png"
 
-	var buf bytes.Buffer
 	var holder = [256][256]int{}
 	var averageValue float64 = 30
 
@@ -34,27 +35,62 @@ func main() {
 		for _, uri := range uris {
 			filename = uri.Path()
 			// Open image file
-			img, _ := os.Open(filename)
+			imgfile, _ := os.Open(filename)
+			buf, _ := mmap.Map(imgfile, mmap.RDONLY, 0)
+			defer imgfile.Close()
 
-			defer img.Close()
-			buf = bytes.Buffer{}
 			holder = [256][256]int{}
-			io.Copy(&buf, img)
 
-			// Iterate through each byte of the image
-			for i := 0; i < len(buf.Bytes())-1; i++ {
-				holder[buf.Bytes()[i]][buf.Bytes()[i+1]]++
+			numCores := runtime.NumCPU() // Get the number of CPU cores
+			chunkSize := len(buf) / numCores
+			var wg sync.WaitGroup
+			wg.Add(numCores)
+
+			var mu sync.Mutex // Declare a mutex
+
+			// Process chunks based on the number of CPU cores
+			processChunk := func(start, end int) {
+				defer wg.Done()
+
+				// Use a local holder for each goroutine
+				localHolder := [256][256]int{}
+
+				for i := start; i < end-1; i++ {
+					localHolder[buf[i]][buf[i+1]]++
+				}
+
+				// Merge the results back to the main holder
+				mu.Lock()
+				for x := 0; x < 256; x++ {
+					for y := 0; y < 256; y++ {
+						holder[x][y] += localHolder[x][y]
+					}
+				}
+				mu.Unlock()
 			}
+
+			// Launch goroutines for each chunk
+			for i := 0; i < numCores; i++ {
+				start := i * chunkSize
+				end := start + chunkSize
+				if i == numCores-1 {
+					end = len(buf) // Ensure the last chunk processes up to the end of the buffer
+				}
+				go processChunk(start, end)
+			}
+
+			// Wait for all goroutines to finish
+			wg.Wait()
 
 			image, _ = processFile(averageValue, &holder)
 			imageelement.Image = &image
 			imageelement.Refresh()
-
+			buf.Unmap()
+			runtime.GC()
 		}
-
 	})
 
-	// add slider
+	// Add slider
 	slider := widget.NewSlider(0.001, 2)
 	slider.Step = 0.001
 	slider.OnChanged = func(value float64) {
