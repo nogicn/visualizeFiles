@@ -2,79 +2,80 @@ package main
 
 import (
 	"bytes"
-	"fmt"
 	"image"
 	"image/color"
-	"image/jpeg"
 	_ "image/png"
 	"io"
 	"os"
-	"path/filepath"
-	"sync"
+
+	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/app"
+	"fyne.io/fyne/v2/canvas"
+	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/widget"
 )
 
 func main() {
-	inputFolder := "filesInput"   // Path to the input folder containing images
-	outputFolder := "filesOutput" // Path to the output folder to save processed images
+	myApp := app.New()
+	myWindow := myApp.NewWindow("Canvas")
 
-	// Create output folder if it doesn't exist
-	if _, err := os.Stat(outputFolder); os.IsNotExist(err) {
-		os.Mkdir(outputFolder, os.ModePerm)
-	}
+	filename := "filesInput/randomphoto.png"
 
-	// Initialize a wait group to synchronize goroutines
-	var wg sync.WaitGroup
+	var buf bytes.Buffer
+	var holder = [256][256]int{}
+	var averageValue float64 = 30
 
-	// Open the input folder
-	err := filepath.Walk(inputFolder, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
+	image, _ := processFile(30, &holder)
+	imageelement := canvas.NewImageFromImage(&image)
+	imageelement.FillMode = canvas.ImageFillOriginal
+	imageelement.Resize(fyne.NewSize(100, 100))
+
+	myWindow.SetOnDropped(func(position fyne.Position, uris []fyne.URI) {
+		for _, uri := range uris {
+			filename = uri.Path()
+			// Open image file
+			img, _ := os.Open(filename)
+
+			defer img.Close()
+			buf = bytes.Buffer{}
+			holder = [256][256]int{}
+			io.Copy(&buf, img)
+
+			// Iterate through each byte of the image
+			for i := 0; i < len(buf.Bytes())-1; i++ {
+				holder[buf.Bytes()[i]][buf.Bytes()[i+1]]++
+			}
+
+			image, _ = processFile(averageValue, &holder)
+			imageelement.Image = &image
+			imageelement.Refresh()
+
 		}
-		// Skip directories
-		if info.IsDir() {
-			return nil
-		}
 
-		// Increment the wait group counter
-		wg.Add(1)
-
-		// Process each file in the input folder concurrently
-		go func(filePath string) {
-			defer wg.Done()
-			processFile(filePath, outputFolder)
-		}(path)
-
-		return nil
 	})
 
-	if err != nil {
-		fmt.Println("Error:", err)
+	// add slider
+	slider := widget.NewSlider(0.001, 2)
+	slider.Step = 0.001
+	slider.OnChanged = func(value float64) {
+		averageValue = value
+		image, _ = processFile(averageValue, &holder)
+		imageelement.Image = &image
+		imageelement.Refresh()
 	}
 
-	// Wait for all goroutines to finish
-	wg.Wait()
+	// Create the content container
+	content := container.NewVBox(
+		slider,
+		imageelement,
+	)
+
+	myWindow.SetContent(content)
+	myWindow.Resize(fyne.NewSize(400, 400)) // Set a reasonable window size
+	myWindow.ShowAndRun()
 }
 
-func processFile(filePath string, outputFolder string) {
-	// Open image file
-	img, err := os.Open(filePath)
-	if err != nil {
-		fmt.Printf("Error opening file %s: %v\n", filePath, err)
-		return
-	}
-	defer img.Close()
-
-	// Read image data into buffer
-	var buf bytes.Buffer
-	io.Copy(&buf, img)
-
-	// Create a general holder 256x256
-	var holder = [256][256]int{}
-
-	// Iterate through each byte of the image
-	for i := 0; i < len(buf.Bytes())-1; i++ {
-		holder[buf.Bytes()[i]][buf.Bytes()[i+1]]++
-	}
+func processFile(targetAverage float64, holder *[256][256]int) (image.Gray, error) {
 
 	// Create a grayscale image based on the holder
 	newImage := image.NewGray(image.Rect(0, 0, 256, 256))
@@ -89,9 +90,6 @@ func processFile(filePath string, outputFolder string) {
 		}
 	}
 
-	// Target average pixel value
-	targetAverage := 30
-
 	// Calculate scaling factor to achieve target average
 	scaleFactor := float64(targetAverage*256*256) / float64(max)
 
@@ -103,19 +101,5 @@ func processFile(filePath string, outputFolder string) {
 			newImage.SetGray(i, j, color.Gray{Y: grayValue})
 		}
 	}
-
-	// Generate output file name
-	outputFileName := filepath.Join(outputFolder, filepath.Base(filePath)+".jpg")
-
-	// Save the image to output folder
-	out, err := os.Create(outputFileName)
-	if err != nil {
-		fmt.Printf("Error creating output file %s: %v\n", outputFileName, err)
-		return
-	}
-	defer out.Close()
-
-	if err := jpeg.Encode(out, newImage, nil); err != nil {
-		fmt.Printf("Error encoding image to file %s: %v\n", outputFileName, err)
-	}
+	return *newImage, nil
 }
