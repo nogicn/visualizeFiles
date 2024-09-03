@@ -1,6 +1,6 @@
 module visualize
 
-go 1.21.4
+go 1.19
 
 require fyne.io/fyne/v2 v2.5.1
 
