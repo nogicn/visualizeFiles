@@ -21,7 +21,7 @@ func main() {
 	myApp := app.New()
 	myWindow := myApp.NewWindow("Canvas")
 
-	filename := "filesInput/randomphoto.png"
+	filename := ""
 
 	var holder = [256][256]int{}
 	var averageValue float64 = 30
